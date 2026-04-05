@@ -1,0 +1,257 @@
+# ══════════════════════════════════════════════════════════════════════
+#  StreamFlow · Практические файлы для вебинара
+#  Kubernetes для джуниоров
+#
+#  Как применять:
+#    kubectl apply -f <filename>
+#
+#  Как удалить всё:
+#    kubectl delete -f <filename>
+# ══════════════════════════════════════════════════════════════════════
+
+# ──────────────────────────────────────────────────────────────────────
+# ФАЙЛ 1: configmap.yaml
+# Модуль 3 — ConfigMap
+# ──────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stream-config            # имя — по нему ссылаемся из подов
+data:
+  # Параметры транскодирования
+  TRANSCODE_QUALITY: "720p"      # попробуй поменять на "1080p" и пересоздать поды
+  MAX_CONCURRENT_JOBS: "4"       # сколько задач берёт воркер одновременно
+
+  # Адреса сервисов (DNS-имена Service, не IP!)
+  CATALOG_URL: "http://catalog-service"
+  NOTIFICATION_URL: "http://notification-service"
+
+  # Логирование
+  LOG_LEVEL: "info"              # попробуй "debug" чтобы видеть больше логов
+---
+# ──────────────────────────────────────────────────────────────────────
+# ФАЙЛ 2: deployment.yaml
+# Модуль 1 — Pod и Deployment
+# Модуль 3 — подключение ConfigMap
+# ──────────────────────────────────────────────────────────────────────
+
+# --- transcode-worker ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transcode-worker
+spec:
+  replicas: 1                    # ЗАДАНИЕ: увеличь до 3 и примени — что изменится?
+  selector:
+    matchLabels:
+      app: transcode-worker      # должен совпадать с labels в template
+  template:
+    metadata:
+      labels:
+        app: transcode-worker    # по этому лейблу Service находит поды
+    spec:
+      containers:
+      - name: worker
+        image: streamflow-mock:v1
+        imagePullPolicy: Never   # используем локальный образ из minikube
+        env:
+        - name: SERVICE_NAME
+          value: "transcoder"
+        # Подключаем конфиг из ConfigMap
+        - name: TRANSCODE_QUALITY
+          valueFrom:
+            configMapKeyRef:
+              name: stream-config          # имя ConfigMap
+              key: TRANSCODE_QUALITY       # ключ из data
+        - name: MAX_CONCURRENT_JOBS
+          valueFrom:
+            configMapKeyRef:
+              name: stream-config
+              key: MAX_CONCURRENT_JOBS
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: stream-config
+              key: LOG_LEVEL
+        ports:
+        - containerPort: 8080
+        # Liveness Probe — Kubernetes проверяет что воркер жив
+        livenessProbe:
+          httpGet:
+            path: /healthz       # наш сервис должен отвечать 200 на этот путь
+            port: 8080
+          initialDelaySeconds: 3 # подождать перед первой проверкой
+          periodSeconds: 5       # проверять каждые 5 секунд
+          failureThreshold: 3    # 3 провала подряд → перезапуск
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"          # 100m = 0.1 CPU
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+---
+# --- catalog-service deployment ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog-deploy
+spec:
+  replicas: 2                    # две реплики для надёжности
+  selector:
+    matchLabels:
+      app: catalog
+  template:
+    metadata:
+      labels:
+        app: catalog
+    spec:
+      containers:
+      - name: server
+        image: streamflow-mock:v1
+        imagePullPolicy: Never
+        env:
+        - name: SERVICE_NAME
+          value: "catalog"
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: stream-config
+              key: LOG_LEVEL
+        ports:
+        - containerPort: 8080
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 5
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+---
+# --- api-gateway deployment ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-deploy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+      - name: server
+        image: streamflow-mock:v1
+        imagePullPolicy: Never
+        env:
+        - name: SERVICE_NAME
+          value: "api"
+        - name: CATALOG_URL
+          valueFrom:
+            configMapKeyRef:
+              name: stream-config
+              key: CATALOG_URL
+        ports:
+        - containerPort: 8080
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          initialDelaySeconds: 3
+          periodSeconds: 5
+          failureThreshold: 3
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+---
+# ──────────────────────────────────────────────────────────────────────
+# ФАЙЛ 3: service.yaml
+# Модуль 2 — Service и DNS
+# ──────────────────────────────────────────────────────────────────────
+
+# --- transcode-service ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: transcode-service        # это DNS-имя внутри кластера
+spec:
+  selector:
+    app: transcode-worker        # находит поды с этим лейблом
+  ports:
+  - port: 80                     # порт Service (снаружи пода)
+    targetPort: 8080             # порт контейнера (внутри пода)
+  # type: ClusterIP — по умолчанию, доступен только внутри кластера
+---
+# --- catalog-service ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalog-service          # http://catalog-service → поды catalog
+spec:
+  selector:
+    app: catalog
+  ports:
+  - port: 80
+    targetPort: 8080
+---
+# --- api-service ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-service              # этот Service будет за Ingress
+spec:
+  selector:
+    app: api
+  ports:
+  - port: 80
+    targetPort: 8080
+---
+# ──────────────────────────────────────────────────────────────────────
+# ФАЙЛ 4: ingress.yaml
+# Модуль 4 — Ingress
+#
+# Перед применением:
+#   minikube addons enable ingress
+#   minikube tunnel  (в отдельном терминале)
+# ──────────────────────────────────────────────────────────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: stream-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx        # используем nginx контроллер
+  rules:
+  - http:
+      paths:
+      - path: /                  # все запросы идут на api-gateway
+        pathType: Prefix
+        backend:
+          service:
+            name: api-service    # только api-service доступен снаружи
+            port:
+              number: 80
+      # ЗАДАНИЕ: добавь маршрут /catalog → catalog-service
+      # - path: /catalog
+      #   pathType: Prefix
+      #   backend:
+      #     service:
+      #       name: catalog-service
+      #       port:
+      #         number: 80
