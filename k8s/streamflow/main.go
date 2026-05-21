@@ -15,6 +15,8 @@ func main() {
 
 	// --- ОБЩИЕ ЭНДПОИНТЫ ДЛЯ ВСЕХ РОЛЕЙ ---
 	// Теперь Liveness Probe всегда будет получать 200 OK
+
+	log.Println("ОБЩИЕ ЭНДПОИНТЫ ДЛЯ ВСЕХ РОЛЕЙ")
 	http.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "OK")

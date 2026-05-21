@@ -1,0 +1,53 @@
+# Перенаправляем команды docker на daemon внутри minikube
+minikube start
+
+eval $(minikube docker-env)
+
+docker build -t streamflow-mock:v1 .
+
+docker images
+
+# Посмотреть ноды кластера
+kubectl get nodes
+# Посмотреть системные поды
+kubectl get pods -n kube-system
+
+minikube addons enable ingress
+# Дождитесь пока ingress-nginx-controller перейдёт в Running
+kubectl get pods -n ingress-nginx --watch
+
+kubectl apply -f streamflow.yaml
+
+kubectl describe pod <pod-name>
+kubectl logs <pod-name>
+
+# Удалите один из catalog-подов
+kubectl delete pod <catalog-pod-name>
+
+# Узнать IP пода
+kubectl get pod <transcoder-pod-name> -o wide
+# Войти внутрь пода и вызвать /fail
+kubectl exec -it <transcoder-pod-name> -- wget -q -O- http://localhost:8080/fail
+
+
+kubectl get services
+
+
+kubectl exec -it <api-pod-name> -- sh
+# Внутри контейнера:
+wget -q -O- http://catalog-service/list
+exit
+
+альтернатива последнему блоку команд kubectl exec -it <api-pod-name> -- wget -q -O- http://catalog-service/list
+
+
+# В отдельной вкладке — держите открытым
+minikube tunnel
+curl http://localhost/
+
+
+kubectl get configmap stream-config -o yaml
+
+kubectl exec -it <api-pod-name> -- env | grep WELCOME
+
+

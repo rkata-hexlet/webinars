@@ -1,10 +1,13 @@
-# 1. ConfigMap
+# StreamFlow Infrastructure Manifest
+# Применяется командой: kubectl apply -f streamflow.yaml
+
+# 1. ConfigMap — Общие настройки для всех сервисов
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: stream-config
 data:
-  WELCOME_MSG: "StreamFlow v1.0"
+  WELCOME_MSG: "StreamFlow v2.0" # Общая переменная окружения для всех сервисов
 ---
 # 2. Catalog Deployment
 apiVersion: apps/v1
@@ -12,25 +15,41 @@ kind: Deployment
 metadata:
   name: catalog-deploy
 spec:
-  replicas: 2
+  replicas: 3
   selector:
     matchLabels:
-      app: catalog
+      app: catalog # Метка для селектора, чтобы связать с сервисом
   template:
     metadata:
       labels:
-        app: catalog
+        app: catalog # Метка для селектора, чтобы связать с сервисом
     spec:
       containers:
       - name: server
-        image: streamflow-mock:v1
-        imagePullPolicy: Never
-        env: [{name: SERVICE_NAME, value: "catalog"}]
-        ports: [{containerPort: 8080}]
+        image: streamflow-mock:v2 # Локальный образ, который мы создали
+        #image: streamflow-mock:v999 # Ошибка в теге образа для демонстрации проблемы с Pull Policy
+        envFrom:
+          - configMapRef:
+              name: stream-config
+        imagePullPolicy: IfNotPresent # Не тянуть образ, если он уже есть (локально)
+        env: 
+          - name: SERVICE_NAME
+            value: "catalog"
+        ports:
+          - name: http-port
+            containerPort: 8080
         livenessProbe:
-          httpGet: {path: /healthz, port: 8080}
+          httpGet:
+            path: /healthz
+            port: http-port
           initialDelaySeconds: 3
-          periodSeconds: 5
+          periodSeconds: 6
+        readinessProbe:
+          httpGet:
+            path: /list
+            port: http-port
+          initialDelaySeconds: 5
+          periodSeconds: 10
 ---
 # 3. Catalog Service
 apiVersion: v1
@@ -38,8 +57,13 @@ kind: Service
 metadata:
   name: catalog-service
 spec:
-  selector: {app: catalog}
-  ports: [{port: 80, targetPort: 8080}]
+  type: ClusterIP # Внутренний сервис для связи между API и Catalog
+  selector:
+    app: catalog
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
 ---
 # 4. API Gateway Deployment
 apiVersion: apps/v1
@@ -58,13 +82,28 @@ spec:
     spec:
       containers:
       - name: server
-        image: streamflow-mock:v1
-        imagePullPolicy: Never
-        env: [{name: SERVICE_NAME, value: "api"}]
-        ports: [{containerPort: 8080}]
+        image: streamflow-mock:v2
+        envFrom:
+          - configMapRef:
+              name: stream-config
+        imagePullPolicy: IfNotPresent
+        env:
+          - name: SERVICE_NAME
+            value: "api"
+        ports:
+          - name: http-port
+            containerPort: 8080
         livenessProbe:
-          httpGet: {path: /healthz, port: 8080}
-          initialDelaySeconds: 3
+          httpGet:
+            path: /healthz
+            port: http-port
+          initialDelaySeconds: 4
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /
+            port: http-port
+          initialDelaySeconds: 5
 ---
 # 5. API Service
 apiVersion: v1
@@ -72,10 +111,15 @@ kind: Service
 metadata:
   name: api-service
 spec:
-  selector: {app: api}
-  ports: [{port: 80, targetPort: 8080}]
+  type: LoadBalancer # Позволяет внешнему трафику попасть в кластер
+  selector:
+    app: api
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
 ---
-# 6. Ingress
+# 6. Ingress — Точка входа для пользователя
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -85,11 +129,14 @@ spec:
   - http:
       paths:
       - path: /
-        pathType: Prefix
+        pathType: Prefix # Все запросы идут на API
         backend:
-          service: {name: api-service, port: {number: 80}}
+          service:
+            name: api-service
+            port:
+              number: 80
 ---
-# 7. Transcoder (Тот самый "потеряшка")
+# 7. Transcoder Deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -106,9 +153,41 @@ spec:
     spec:
       containers:
       - name: worker
-        image: streamflow-mock:v1
-        imagePullPolicy: Never
-        env: [{name: SERVICE_NAME, value: "transcoder"}]
+        image: streamflow-mock:v2
+        imagePullPolicy: IfNotPresent
+        envFrom:
+          - configMapRef:
+              name: stream-config
+        ports:
+          - name: http-port
+            containerPort: 8080
+        env:
+          - name: SERVICE_NAME
+            value: "transcoder"
+        # Лимиты важны для транскодера, так как он может потреблять много CPU
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "256Mi"
         livenessProbe:
-          httpGet: {path: /healthz, port: 8080}
-          initialDelaySeconds: 3
+          httpGet:
+            path: /healthz
+            port: http-port
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+# 8. Transcoder Service — Теперь API может узнать статус транскодинга по DNS
+apiVersion: v1
+kind: Service
+metadata:
+  name: transcoder-service
+spec:
+  selector:
+    app: transcoder
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080

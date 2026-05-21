@@ -1,0 +1,10 @@
+kubectl delete -f streamflow.yaml
+docker rmi streamflow-mock:v1
+
+
+
+# Сначала убедись, что образ актуален
+docker build -t streamflow-mock:v1 .
+
+# Запускай всё заново
+kubectl apply -f ../streamflow.yaml

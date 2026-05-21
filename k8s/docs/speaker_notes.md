@@ -206,7 +206,7 @@ YAML — ткни в `selector`: "Вот ключевое поле. Service не
 
 После `kubectl exec`: "Мы сейчас внутри пода. Это как SSH — только в контейнер."
 
-После `curl http://catalog-service/healthz`: "Видите? DNS-имя резолвится в нужный IP автоматически. Kubernetes держит внутренний DNS-сервер."
+После `wget -qO-  http://catalog-service/healthz`: "Видите? DNS-имя резолвится в нужный IP автоматически. Kubernetes держит внутренний DNS-сервер."
 
 После `kubectl delete pod` + повторный curl: "Под пересоздался, IP поменялся — curl всё равно работает. Service нашёл новый под по лейблу."
 
